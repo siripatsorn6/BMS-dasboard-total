@@ -5,8 +5,8 @@
 import { useRef } from 'react'
 import {
   ResponsiveContainer,
-  BarChart,
-  Bar,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -91,7 +91,7 @@ export function VisitTrendChart({
       </CardHeader>
       <CardContent>
           <ResponsiveContainer width="100%" height={350}>
-          <BarChart
+          <AreaChart
             data={data}
             onClick={(state: Record<string, unknown>) => {
               const payload = state?.activePayload as Array<{ payload: { date: string } }> | undefined
@@ -100,7 +100,13 @@ export function VisitTrendChart({
               }
             }}
           >
-            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+            <defs>
+              <linearGradient id="visitCountGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.7} />
+                <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0.05} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
             <XAxis
               dataKey="date"
               tickFormatter={formatDateLabel}
@@ -117,7 +123,7 @@ export function VisitTrendChart({
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             <Tooltip
               labelFormatter={((label: unknown) => formatDateLabel(String(label))) as any}
-              formatter={((value: unknown) => [Number(value).toLocaleString(), 'ครั้ง']) as any}
+              formatter={((value: unknown) => [`${Number(value).toLocaleString()} ราย`, '']) as any}
               contentStyle={{
                 borderRadius: '8px',
                 border: '1px solid hsl(var(--border))',
@@ -125,13 +131,17 @@ export function VisitTrendChart({
                 color: 'hsl(var(--popover-foreground))',
               }}
             />
-            <Bar
+            <Area
+              type="monotone"
               dataKey="visitCount"
-              fill="hsl(var(--chart-1))"
-              radius={[4, 4, 0, 0]}
+              stroke="hsl(var(--chart-1))"
+              strokeWidth={2}
+              fill="url(#visitCountGradient)"
+              dot={{ r: 4, fill: 'white', stroke: 'hsl(var(--chart-1))', strokeWidth: 2 }}
+              activeDot={{ r: 5, fill: 'white', stroke: 'hsl(var(--chart-1))', strokeWidth: 2 }}
               cursor="pointer"
             />
-          </BarChart>
+          </AreaChart>
         </ResponsiveContainer>
       </CardContent>
     </Card>

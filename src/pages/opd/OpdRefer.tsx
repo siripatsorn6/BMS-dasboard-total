@@ -1,16 +1,16 @@
 // =============================================================================
-// Department: เวชศาสตร์ฉุกเฉิน / ER (Emergency Medicine)
+// OPD: งานส่งต่อผู้ป่วย Refer
 // =============================================================================
 
-import { Siren } from 'lucide-react'
+import { Send } from 'lucide-react'
 import { DepartmentPageTemplate } from '@/components/dashboard/DepartmentPageTemplate'
 
-export default function EmergencyMedicine() {
+export default function OpdRefer() {
   return (
     <DepartmentPageTemplate
-      title="เวชศาสตร์ฉุกเฉิน (ER)"
-      subtitle="Emergency Medicine"
-      icon={Siren}
+      title="งานส่งต่อผู้ป่วย Refer"
+      subtitle="Patient Referral"
+      icon={Send}
     />
   )
 }

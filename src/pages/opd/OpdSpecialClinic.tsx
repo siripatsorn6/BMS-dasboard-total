@@ -1,16 +1,16 @@
 // =============================================================================
-// Department: ศัลยกรรม (Surgery)
+// OPD: งานคลินิกพิเศษ
 // =============================================================================
 
-import { Scissors } from 'lucide-react'
+import { Star } from 'lucide-react'
 import { DepartmentPageTemplate } from '@/components/dashboard/DepartmentPageTemplate'
 
-export default function Surgery() {
+export default function OpdSpecialClinic() {
   return (
     <DepartmentPageTemplate
-      title="ศัลยกรรม"
-      subtitle="Surgery"
-      icon={Scissors}
+      title="งานคลินิกพิเศษ"
+      subtitle="Special Clinic"
+      icon={Star}
     />
   )
 }

@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { useMemo, useRef } from 'react'
+import { RotateCw } from 'lucide-react'
 import {
   PieChart,
   Pie,
@@ -12,6 +13,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/dashboard/EmptyState'
 import { ChartExportMenu } from '@/components/dashboard/ChartExportMenu'
@@ -37,6 +39,7 @@ interface OpdDepartmentDonutChartProps {
   data: DepartmentData[]
   isLoading: boolean
   error?: Error | null
+  onRetry?: () => Promise<void>
   className?: string
   title?: string
 }
@@ -86,26 +89,36 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
         color: 'hsl(var(--popover-foreground))',
         padding: '10px 14px',
         fontSize: 12,
-        maxWidth: 220,
+        minWidth: 220,
+        maxWidth: 280,
       }}
     >
       {isOthers ? (
         <>
           <p style={{ fontWeight: 600, marginBottom: 6 }}>
-            อื่นๆ — {slice.value.toLocaleString()} ราย
+            อื่นๆ — {slice.value.toLocaleString()} ราย ({slice.payload.others!.length} แผนก)
           </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {slice.payload.others!.map((d) => (
-              <div
-                key={d.departmentName}
-                style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}
-              >
-                <span style={{ color: 'hsl(var(--muted-foreground))' }}>
-                  {d.departmentName}
-                </span>
-                <span style={{ fontWeight: 500 }}>{d.visitCount.toLocaleString()}</span>
-              </div>
-            ))}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+            }}
+          >
+            {slice.payload.others!
+              .slice()
+              .sort((a, b) => b.visitCount - a.visitCount)
+              .map((d) => (
+                <div
+                  key={d.departmentName}
+                  style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}
+                >
+                  <span style={{ color: 'hsl(var(--muted-foreground))', flex: 1 }}>
+                    {d.departmentName}
+                  </span>
+                  <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{d.visitCount.toLocaleString()} ราย</span>
+                </div>
+              ))}
           </div>
         </>
       ) : (
@@ -130,12 +143,12 @@ function DonutLegend({ slices }: LegendProps) {
   return (
     <div className="flex flex-col gap-1 flex-1 min-w-0">
       {slices.map((slice, index) => (
-        <div key={slice.name} className="flex items-center gap-2 text-xs min-w-0">
+        <div key={`${slice.name}-${index}`} className="flex items-center gap-2 text-xs min-w-0">
           <span
             className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
             style={{ backgroundColor: CHART_COLORS[index] ?? '#94a3b8' }}
           />
-          <span className="flex-1 text-muted-foreground" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'14ch'}}>{slice.name}</span>
+          <span className="flex-1 truncate text-muted-foreground min-w-0">{slice.name}</span>
           <span className="font-medium tabular-nums shrink-0">{slice.value.toLocaleString()}</span>
         </div>
       ))}
@@ -151,6 +164,7 @@ export function OpdDepartmentDonutChart({
   data,
   isLoading,
   error,
+  onRetry,
   className,
   title = 'ผู้ป่วยนอกเดือนนี้แยกตามแผนก',
 }: OpdDepartmentDonutChartProps) {
@@ -197,10 +211,23 @@ export function OpdDepartmentDonutChart({
           <CardTitle className="text-lg">ผู้ป่วยนอกเดือนนี้แยกตามแผนก</CardTitle>
         </CardHeader>
         <CardContent>
-          <EmptyState
-            title="ไม่สามารถโหลดข้อมูลได้"
-            description={error.message}
-          />
+          <div className="flex flex-col items-center justify-center gap-4 py-6">
+            <EmptyState
+              title="ไม่สามารถโหลดข้อมูลได้"
+              description={error.message}
+            />
+            {onRetry && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onRetry}
+                className="gap-2"
+              >
+                <RotateCw className="h-4 w-4" />
+                ลองอีกครั้ง
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
     )
@@ -223,8 +250,8 @@ export function OpdDepartmentDonutChart({
     <Card ref={containerRef} className={cn(className)}>
       <CardHeader className="flex flex-row items-start justify-between space-y-0">
         <div>
-          <CardTitle className="text-lg">
-            ผู้ป่วยนอกเดือนนี้แยกตามแผนก{' '}
+          <CardTitle className="text-base">
+            การเข้ารับบริการเดือนนี้แยกตามแผนก{' '}
             <span className="mx-1 text-muted-foreground/50">|</span>{' '}
             <span className="font-semibold text-foreground">
               {total.toLocaleString()}
@@ -232,16 +259,16 @@ export function OpdDepartmentDonutChart({
             ราย
           </CardTitle>
           <CardDescription>
-            แยกตามคลินิก/แผนก เฉพาะ OPD (ไม่รวม IPD)
+            แยกตามคลินิก/แผนก (รวม OPD และ IPD)
           </CardDescription>
         </div>
         <ChartExportMenu containerRef={containerRef} data={data} title={title} />
       </CardHeader>
       <CardContent>
           <div className="flex items-center gap-4">
-          {/* Donut chart */}
-          <div className="shrink-0">
-            <ResponsiveContainer width={160} height={160}>
+          {/* Donut chart — 60% */}
+          <div className="basis-3/5 min-w-0 overflow-visible">
+            <ResponsiveContainer width="100%" height={180}>
               <PieChart>
                 <Pie
                   data={slices}
@@ -249,8 +276,8 @@ export function OpdDepartmentDonutChart({
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  innerRadius={45}
-                  outerRadius={75}
+                  innerRadius={50}
+                  outerRadius={80}
                   paddingAngle={2}
                   strokeWidth={0}
                 >
@@ -266,8 +293,10 @@ export function OpdDepartmentDonutChart({
             </ResponsiveContainer>
           </div>
 
-            {/* Legend */}
-            <DonutLegend slices={slices} />
+            {/* Legend — 40% */}
+            <div className="basis-2/5 min-w-0">
+              <DonutLegend slices={slices} />
+            </div>
           </div>
       </CardContent>
     </Card>

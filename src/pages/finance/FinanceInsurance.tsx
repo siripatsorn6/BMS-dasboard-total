@@ -1,16 +1,16 @@
 // =============================================================================
-// Department: นรีเวชกรรม (Gynecology)
+// งานประกันรายได้
 // =============================================================================
 
-import { HeartPulse } from 'lucide-react'
+import { ShieldCheck } from 'lucide-react'
 import { DepartmentPageTemplate } from '@/components/dashboard/DepartmentPageTemplate'
 
-export default function Gynecology() {
+export default function FinanceInsurance() {
   return (
     <DepartmentPageTemplate
-      title="นรีเวชกรรม"
-      subtitle="Gynecology"
-      icon={HeartPulse}
+      title="งานประกันรายได้"
+      subtitle="Health Insurance & Revenue"
+      icon={ShieldCheck}
     />
   )
 }

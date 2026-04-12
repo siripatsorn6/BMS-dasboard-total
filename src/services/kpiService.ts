@@ -76,11 +76,10 @@ export async function getOpdVisitDetail(
   const todaySql =
     `SELECT ` +
     `COUNT(DISTINCT ovst.vn) as count_vn, ` +
-    `COUNT(DISTINCT CASE WHEN oa.visit_vn IS NULL THEN ovst.vn END) as walkin, ` +
-    `COUNT(DISTINCT CASE WHEN oa.visit_vn IS NOT NULL THEN ovst.vn END) as oappoint ` +
+    `COUNT(DISTINCT CASE WHEN oa.hn <> '' THEN oa.hn END) as oappoint ` +
     `FROM ovst ` +
     `INNER JOIN spclty s ON s.spclty = ovst.spclty ` +
-    `LEFT JOIN oapp oa ON ovst.hn = oa.hn AND oa.depcode = ovst.main_dep AND ovst.vstdate = oa.nextdate ` +
+    `LEFT JOIN oapp oa ON ovst.hn = oa.hn AND ovst.vstdate = oa.nextdate AND (oapp_status_id IS NULL OR oapp_status_id < 4) ` +
     `WHERE ovst.vstdate = ${today}`;
 
   const yesterdaySql =
@@ -97,14 +96,14 @@ export async function getOpdVisitDetail(
 
   const todayRows = parseQueryResponse(todayResp, (row) => ({
     total: Number(row['count_vn'] ?? 0),
-    walkin: Number(row['walkin'] ?? 0),
     appointment: Number(row['oappoint'] ?? 0),
   }));
   const yesterdayRows = parseQueryResponse(yesterdayResp, (row) =>
     Number(row['count_vn'] ?? 0),
   );
 
-  const today_ = todayRows[0] ?? { total: 0, walkin: 0, appointment: 0 };
+  const today_ = todayRows[0] ?? { total: 0, appointment: 0 };
+  const walkin = today_.total - today_.appointment;
   const yesterdayTotal = yesterdayRows[0] ?? 0;
 
   const trendPercent =
@@ -114,7 +113,7 @@ export async function getOpdVisitDetail(
 
   return {
     total: today_.total,
-    walkin: today_.walkin,
+    walkin,
     appointment: today_.appointment,
     yesterdayTotal,
     trendPercent,
@@ -156,7 +155,7 @@ export async function getTodayDischargedCount(
   config: ConnectionConfig,
   dbType: DatabaseType,
 ): Promise<number> {
-  const sql = `SELECT COUNT(*) as total FROM ipt WHERE dchdate = ${queryBuilder.currentDate(dbType)}`;
+  const sql = `SELECT COUNT(*) as total FROM ipt WHERE confirm_discharge = 'Y' AND dchdate = ${queryBuilder.currentDate(dbType)}`;
   const response = await executeSqlViaApi(sql, config);
   const rows = parseQueryResponse(response, (row) => Number(row['total'] ?? 0));
   return rows[0] ?? 0;
@@ -241,21 +240,19 @@ export async function getIpdWardDistribution(
     yesterdayTotalCount = 0;
   }
 
-  // Some HOSxP installations might not include the `ward` table or may have
-  // different column names. We attempt the richer join first, then fallback
-  // to a safer query that only relies on the `ipt` table.
+  // Use LEFT JOIN so patients whose ward code has no match in the `ward` table
+  // are still counted (grouped as "ไม่ระบุตึก"). This ensures the sum across
+  // all ward rows equals getIpdPatientCount() which counts all confirm_discharge='N'.
   const joinSql =
-    `SELECT COALESCE(w.name, i.ward, 'ไม่ระบุ') as ward_name, COUNT(*) as patient_count, COALESCE(w.bedcount, 0) as bed_count ` +
-    `FROM ward w  ` +
-    `LEFT JOIN ipt i ON i.ward = w.ward ` +
-    `WHERE w.ward_active ='Y' AND (i.dchdate IS NULL OR i.confirm_discharge ='N') ` +
-    `GROUP BY w.name, i.ward, w.bedcount ` +
-    `ORDER BY patient_count DESC ` +
-    `LIMIT 10`;
+    `SELECT w.ward as wardcode, COALESCE(w.name, CONCAT('ward: ', ipt.ward), 'ไม่ระบุตึก') as wardname, COUNT(DISTINCT ipt.an) as onward_count ` +
+    `FROM ipt LEFT JOIN ward w ON w.ward = ipt.ward ` +
+    `WHERE ipt.confirm_discharge = 'N' ` +
+    `GROUP BY ipt.ward, w.ward, wardname ` +
+    `ORDER BY onward_count DESC`;
 
   try {
     const response = await executeSqlViaApi(joinSql, config);
-    const currentTotal = parseQueryResponse(response, (row) => Number(row['patient_count'] ?? 0))
+    const currentTotal = parseQueryResponse(response, (row) => Number(row['onward_count'] ?? 0))
       .reduce((sum, count) => sum + count, 0);
 
     const percentageChange = yesterdayTotalCount > 0
@@ -263,21 +260,21 @@ export async function getIpdWardDistribution(
       : 0;
 
     return parseQueryResponse(response, (row) => ({
-      wardName: String(row['ward_name'] ?? 'ไม่ระบุ'),
-      patientCount: Number(row['patient_count'] ?? 0),
-      bedCount: Number(row['bed_count'] ?? 0),
+      wardName: String(row['wardname'] ?? 'ไม่ระบุ'),
+      wardCode: String(row['wardcode'] ?? ''),
+      patientCount: Number(row['onward_count'] ?? 0),
+      bedCount: 0,
       yesterdayPatientCount: yesterdayTotalCount,
       percentageChange: percentageChange,
     }));
-  } catch (error) {
-    // Fallback: keep the ward code, no bed count.
+  } catch {
+    // Fallback: group directly from ipt; includes all patients regardless of ward.
     const fallbackSql =
-      `SELECT COALESCE(ward, 'ไม่ระบุ') as ward_name, COUNT(*) as patient_count ` +
+      `SELECT ward as wardcode, COALESCE(ward, 'ไม่ระบุตึก') as ward_name, COUNT(DISTINCT an) as patient_count ` +
       `FROM ipt ` +
       `WHERE confirm_discharge = 'N' ` +
-      `GROUP BY ward_name ` +
-      `ORDER BY patient_count DESC ` +
-      `LIMIT 10`;
+      `GROUP BY ward ` +
+      `ORDER BY patient_count DESC`;
 
     const response = await executeSqlViaApi(fallbackSql, config);
     const currentTotal = parseQueryResponse(response, (row) => Number(row['patient_count'] ?? 0))
@@ -289,12 +286,67 @@ export async function getIpdWardDistribution(
 
     return parseQueryResponse(response, (row) => ({
       wardName: String(row['ward_name'] ?? 'ไม่ระบุ'),
+      wardCode: String(row['wardcode'] ?? ''),
       patientCount: Number(row['patient_count'] ?? 0),
       bedCount: 0,
       yesterdayPatientCount: yesterdayTotalCount,
       percentageChange: percentageChange,
     }));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Appointment stats for today
+// ---------------------------------------------------------------------------
+
+export interface AppointmentStats {
+  totalAppointments: number;
+  attended: number;
+  notAttended: number;
+  attendanceRate: number;
+  lastWeekSameDayTotal: number;
+  changePercent: number; // positive = increase, negative = decrease
+}
+
+/**
+ * Today's appointment statistics: total, attended, not attended, and rate.
+ */
+export async function getAppointmentStats(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+): Promise<AppointmentStats> {
+  const today = queryBuilder.currentDate(dbType);
+  const lastWeekSameDay = queryBuilder.dateSubtract(dbType, 7);
+
+  const [totalResp, attendedResp, notAttendedResp, lastWeekResp] = await Promise.all([
+    executeSqlViaApi(
+      `SELECT count(distinct hn) as total FROM oapp WHERE (oapp_status_id IS NULL OR oapp_status_id < 4) AND nextdate = ${today}`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT count(distinct ovst.hn) as attended FROM oapp, ovst WHERE oapp.hn = ovst.hn AND ovst.vstdate = oapp.nextdate AND (oapp_status_id IS NULL OR oapp_status_id < 4) AND nextdate = ${today}`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT count(distinct oapp.hn) as not_attended FROM oapp LEFT JOIN ovst ON oapp.hn = ovst.hn AND ovst.vstdate = oapp.nextdate WHERE (oapp_status_id IS NULL OR oapp_status_id < 4) AND nextdate = ${today} AND ovst.hn IS NULL`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT count(distinct hn) as total FROM oapp WHERE nextdate = ${lastWeekSameDay}`,
+      config,
+    ),
+  ]);
+
+  const total = parseQueryResponse(totalResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const attended = parseQueryResponse(attendedResp, (row) => Number(row['attended'] ?? 0))[0] ?? 0;
+  const notAttended = parseQueryResponse(notAttendedResp, (row) => Number(row['not_attended'] ?? 0))[0] ?? 0;
+  const lastWeekSameDayTotal = parseQueryResponse(lastWeekResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const attendanceRate = total > 0 ? Math.round((attended / total) * 100) : 0;
+  const changePercent = lastWeekSameDayTotal > 0
+    ? Math.round(((total - lastWeekSameDayTotal) / lastWeekSameDayTotal) * 100)
+    : 0;
+
+  return { totalAppointments: total, attended, notAttended, attendanceRate, lastWeekSameDayTotal, changePercent };
 }
 
 /**
@@ -479,6 +531,29 @@ export async function getDailyVisitTrend(
   return parseQueryResponse(response, (row) => ({
     date: String(row['visit_date'] ?? ''),
     visitCount: Number(row['visit_count'] ?? 0),
+  }));
+}
+
+/**
+ * Daily ER visit count for a date range (er_regist table).
+ */
+export async function getDailyErVisitTrend(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+  startDate: string,
+  endDate: string,
+): Promise<{ date: string; erCount: number }[]> {
+  const dateExpr = queryBuilder.dateFormat(dbType, 'vstdate', '%Y-%m-%d');
+  const sql =
+    `SELECT ${dateExpr} as visit_date, COUNT(*) as er_count ` +
+    `FROM er_regist ` +
+    `WHERE vstdate >= '${startDate}' AND vstdate <= '${endDate}' ` +
+    `GROUP BY ${dateExpr} ` +
+    `ORDER BY visit_date ASC`;
+  const response = await executeSqlViaApi(sql, config);
+  return parseQueryResponse(response, (row) => ({
+    date: String(row['visit_date'] ?? ''),
+    erCount: Number(row['er_count'] ?? 0),
   }));
 }
 
@@ -798,7 +873,7 @@ export async function getWeeklyMiniTrend(
 }
 
 /**
- * Get top 5 doctors by patient count for the current month.
+ * Get top 10 doctors by patient count for the current month.
  */
 export async function getTopDoctorsThisMonth(
   config: ConnectionConfig,
@@ -811,12 +886,44 @@ export async function getTopDoctorsThisMonth(
     `WHERE ${queryBuilder.dateFormat(dbType, 'o.vstdate', '%Y-%m')} = ${queryBuilder.dateFormat(dbType, queryBuilder.currentDate(dbType), '%Y-%m')} ` +
     `GROUP BY o.doctor, d.name ` +
     `ORDER BY patient_count DESC ` +
-    `LIMIT 5`;
+    `LIMIT 10`;
   const response = await executeSqlViaApi(sql, config);
   return parseQueryResponse(response, (row) => ({
     doctorCode: String(row['doctor_code'] ?? ''),
     doctorName: String(row['doctor_name'] ?? 'Unknown'),
     patientCount: Number(row['patient_count'] ?? 0),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Today's OPD visits by clinic/specialty
+// ---------------------------------------------------------------------------
+
+export interface ClinicVisitCount {
+  clinicName: string;
+  visitCount: number;
+}
+
+/**
+ * Count of distinct OPD visits today, grouped by specialty (clinic),
+ * ordered descending by visit count.
+ */
+export async function getTodayVisitsByClinic(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+): Promise<ClinicVisitCount[]> {
+  const today = queryBuilder.currentDate(dbType);
+  const sql =
+    `SELECT sp.name as spclty_name, count(distinct o.vn) as visit_count ` +
+    `FROM ovst o, spclty sp ` +
+    `WHERE o.spclty = sp.spclty ` +
+    `AND o.vstdate = ${today} ` +
+    `GROUP BY spclty_name ` +
+    `ORDER BY visit_count DESC`;
+  const response = await executeSqlViaApi(sql, config);
+  return parseQueryResponse(response, (row) => ({
+    clinicName: String(row['spclty_name'] ?? 'ไม่ระบุ'),
+    visitCount: Number(row['visit_count'] ?? 0),
   }));
 }
 
@@ -861,10 +968,16 @@ export async function getMonthlyVisitSummary(
   dbType: DatabaseType,
 ): Promise<{ month: string; visitCount: number }[]> {
   const monthExpr = queryBuilder.dateFormat(dbType, 'vstdate', '%Y-%m');
+  const startOfMonth6MonthsAgo = dbType === 'mysql'
+    ? `DATE(DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 6 MONTH), '%Y-%m-01'))`
+    : `DATE_TRUNC('month', CURRENT_DATE - INTERVAL '6 months')::date`;
+  const lastDayOfCurrentMonth = dbType === 'mysql'
+    ? `LAST_DAY(CURDATE())`
+    : `(DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month' - INTERVAL '1 day')::date`;
   const sql =
     `SELECT ${monthExpr} as visit_month, COUNT(*) as visit_count ` +
     `FROM ovst ` +
-    `WHERE vstdate >= ${queryBuilder.dateSubtract(dbType, 180)} ` +
+    `WHERE vstdate >= ${startOfMonth6MonthsAgo} AND vstdate <= ${lastDayOfCurrentMonth} ` +
     `GROUP BY ${monthExpr} ` +
     `ORDER BY visit_month ASC`;
   const response = await executeSqlViaApi(sql, config);
@@ -910,7 +1023,7 @@ export async function getVisitsByDayOfWeek(
 }
 
 /**
- * Top 5 departments by visit count for a date range.
+ * Top 10 first-reception departments (ovst.main_dep) by visit count for a date range.
  */
 export async function getTopDepartmentsForRange(
   config: ConnectionConfig,
@@ -920,11 +1033,11 @@ export async function getTopDepartmentsForRange(
 ): Promise<DepartmentWorkload[]> {
   const sql =
     `SELECT k.depcode as department_code, k.department as department_name, COUNT(*) as visit_count ` +
-    `FROM ovst o LEFT JOIN kskdepartment k ON o.cur_dep = k.depcode ` +
+    `FROM ovst o LEFT JOIN kskdepartment k ON o.main_dep = k.depcode ` +
     `WHERE o.vstdate >= '${startDate}' AND o.vstdate <= '${endDate}' ` +
     `GROUP BY k.depcode, k.department ` +
     `ORDER BY visit_count DESC ` +
-    `LIMIT 5`;
+    `LIMIT 10`;
   const response = await executeSqlViaApi(sql, config);
   return parseQueryResponse(response, (row) => ({
     departmentCode: String(row['department_code'] ?? ''),
@@ -939,27 +1052,26 @@ export async function getTopDepartmentsForRange(
 
 /**
  * Top 10 diagnoses by visit count for a date range.
- * Joins ovstdiag with icd101 for Thai diagnosis names.
+ * Groups by ICD-10 chapter (first 3 chars) joined with icd101 for Thai disease group names.
  */
 export async function getTopDiagnoses(
   config: ConnectionConfig,
   _dbType: DatabaseType,
   startDate: string,
   endDate: string,
-): Promise<{ icd10: string; diagnosisName: string; visitCount: number }[]> {
+): Promise<{ name: string; cc: number }[]> {
   const sql =
-    `SELECT od.icd10, COALESCE(i.tname, i.name, od.icd10) as diagnosis_name, COUNT(*) as visit_count ` +
-    `FROM ovstdiag od ` +
-    `LEFT JOIN icd101 i ON od.icd10 = i.code ` +
-    `WHERE od.vstdate >= '${startDate}' AND od.vstdate <= '${endDate}' ` +
-    `GROUP BY od.icd10, i.tname, i.name ` +
-    `ORDER BY visit_count DESC ` +
+    `SELECT ic.name, COUNT(*) as cc ` +
+    `FROM ovstdiag od, icd101 ic ` +
+    `WHERE LEFT(od.icd10, 3) = ic.code ` +
+    `AND od.vstdate BETWEEN '${startDate}' AND '${endDate}' ` +
+    `GROUP BY ic.name ` +
+    `ORDER BY cc DESC ` +
     `LIMIT 10`;
   const response = await executeSqlViaApi(sql, config);
   return parseQueryResponse(response, (row) => ({
-    icd10: String(row['icd10'] ?? ''),
-    diagnosisName: String(row['diagnosis_name'] ?? ''),
-    visitCount: Number(row['visit_count'] ?? 0),
+    name: String(row['name'] ?? ''),
+    cc: Number(row['cc'] ?? 0),
   }));
 }
 
@@ -1002,10 +1114,11 @@ export async function getMedicationCostSummary(
 ): Promise<{ totalItems: number; totalCost: number; uniqueDrugs: number }> {
   const sql =
     `SELECT COUNT(*) as total_items, ` +
-    `COALESCE(SUM(qty * unitprice), 0) as total_cost, ` +
-    `COUNT(DISTINCT icode) as unique_drugs ` +
-    `FROM opitemrece ` +
-    `WHERE vstdate >= '${startDate}' AND vstdate <= '${endDate}'`;
+    `COALESCE(SUM(op.qty * op.unitprice), 0) as total_cost, ` +
+    `COUNT(DISTINCT op.icode) as unique_drugs ` +
+    `FROM opitemrece op ` +
+    `INNER JOIN drugitems d ON d.icode = op.icode ` +
+    `WHERE op.vstdate >= '${startDate}' AND op.vstdate <= '${endDate}'`;
   const response = await executeSqlViaApi(sql, config);
   const rows = parseQueryResponse(response, (row) => ({
     totalItems: Number(row['total_items'] ?? 0),
@@ -1016,35 +1129,78 @@ export async function getMedicationCostSummary(
 }
 
 /**
- * Death statistics summary.
+ * Total patient expense summary (all billing items in opitemrece) for a date range.
  */
-export async function getDeathSummary(
+export async function getPatientExpenseSummary(
   config: ConnectionConfig,
   _dbType: DatabaseType,
-): Promise<{ totalDeaths: number; thisYearDeaths: number; thisMonthDeaths: number }> {
-  const currentYear = new Date().getFullYear();
-  const currentMonth = String(new Date().getMonth() + 1).padStart(2, '0');
-  const yearStart = `${currentYear}-01-01`;
-  const monthStart = `${currentYear}-${currentMonth}-01`;
-
+  startDate: string,
+  endDate: string,
+): Promise<{ totalExpense: number; totalPatients: number }> {
   const sql =
-    `SELECT ` +
-    `COUNT(*) as total_deaths, ` +
-    `SUM(CASE WHEN death_date >= '${yearStart}' THEN 1 ELSE 0 END) as this_year, ` +
-    `SUM(CASE WHEN death_date >= '${monthStart}' THEN 1 ELSE 0 END) as this_month ` +
-    `FROM death`;
+    `SELECT COALESCE(SUM(qty * unitprice), 0) as total_expense, ` +
+    `COUNT(DISTINCT vn) as total_patients ` +
+    `FROM opitemrece ` +
+    `WHERE vstdate >= '${startDate}' AND vstdate <= '${endDate}'`;
   const response = await executeSqlViaApi(sql, config);
   const rows = parseQueryResponse(response, (row) => ({
-    totalDeaths: Number(row['total_deaths'] ?? 0),
-    thisYearDeaths: Number(row['this_year'] ?? 0),
-    thisMonthDeaths: Number(row['this_month'] ?? 0),
+    totalExpense: Number(row['total_expense'] ?? 0),
+    totalPatients: Number(row['total_patients'] ?? 0),
   }));
-  return rows[0] ?? { totalDeaths: 0, thisYearDeaths: 0, thisMonthDeaths: 0 };
+  return rows[0] ?? { totalExpense: 0, totalPatients: 0 };
 }
 
 /**
- * OPD patient count grouped by specialty (spclty) for the current month.
- * Only OPD visits (an IS NULL). Returns all departments ordered by count desc.
+ * Death statistics summary.
+ */
+export interface DeathSummary {
+  totalDeaths: number;
+  thisYearDeaths: number;
+  lastYearDeaths: number;
+  thisMonthDeaths: number;
+  lastMonthDeaths: number;
+}
+
+export async function getDeathSummary(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+): Promise<DeathSummary> {
+  void dbType;
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const currentDay = String(now.getDate()).padStart(2, '0');
+
+  const today        = `${currentYear}-${currentMonth}-${currentDay}`;
+  const yearStart    = `${currentYear}-01-01`;
+  const lastYearStart = `${currentYear - 1}-01-01`;
+  const lastYearToday = `${currentYear - 1}-${currentMonth}-${currentDay}`;
+  const monthStart   = `${currentYear}-${currentMonth}-01`;
+  const lastMonthDate = new Date(currentYear, now.getMonth() - 1, 1);
+  const lastMonthStart = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}-01`;
+
+  const sql =
+    `SELECT ` +
+    `SUM(CASE WHEN death_date <= '${today}' THEN 1 ELSE 0 END) as total_deaths, ` +
+    `SUM(CASE WHEN death_date >= '${yearStart}' AND death_date <= '${today}' THEN 1 ELSE 0 END) as this_year, ` +
+    `SUM(CASE WHEN death_date >= '${lastYearStart}' AND death_date <= '${lastYearToday}' THEN 1 ELSE 0 END) as last_year, ` +
+    `SUM(CASE WHEN death_date >= '${monthStart}' AND death_date <= '${today}' THEN 1 ELSE 0 END) as this_month, ` +
+    `SUM(CASE WHEN death_date >= '${lastMonthStart}' AND death_date < '${monthStart}' THEN 1 ELSE 0 END) as last_month ` +
+    `FROM death`;
+  const response = await executeSqlViaApi(sql, config);
+  const rows = parseQueryResponse(response, (row) => ({
+    totalDeaths:    Number(row['total_deaths'] ?? 0),
+    thisYearDeaths: Number(row['this_year'] ?? 0),
+    lastYearDeaths: Number(row['last_year'] ?? 0),
+    thisMonthDeaths: Number(row['this_month'] ?? 0),
+    lastMonthDeaths: Number(row['last_month'] ?? 0),
+  }));
+  return rows[0] ?? { totalDeaths: 0, thisYearDeaths: 0, lastYearDeaths: 0, thisMonthDeaths: 0, lastMonthDeaths: 0 };
+}
+
+/**
+ * Visit count grouped by specialty (spclty) for the current month.
+ * Counts all visits from ovst (OPD + IPD). Returns all departments ordered by count desc.
  */
 export async function getOpdDepartmentThisMonth(
   config: ConnectionConfig,
@@ -1056,8 +1212,7 @@ export async function getOpdDepartmentThisMonth(
     `SELECT s.name as spclty_name, COUNT(DISTINCT ovst.vn) as count_vn ` +
     `FROM ovst ` +
     `INNER JOIN spclty s ON s.spclty = ovst.spclty ` +
-    `WHERE ovst.an IS NULL ` +
-    `AND ${monthExpr} = ${currentMonthExpr} ` +
+    `WHERE ${monthExpr} = ${currentMonthExpr} ` +
     `GROUP BY s.name ` +
     `ORDER BY count_vn DESC`;
   const response = await executeSqlViaApi(sql, config);
@@ -1086,4 +1241,321 @@ export async function getDiagnosisSummary(
     uniqueCodes: Number(row['unique_codes'] ?? 0),
   }));
   return rows[0] ?? { totalDiagnoses: 0, uniqueCodes: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Refer-in / Refer-out stats for today
+// ---------------------------------------------------------------------------
+
+export interface ReferStats {
+  referIn: number;
+  referOut: number;
+}
+
+export async function getReferStats(
+  config: ConnectionConfig,
+): Promise<ReferStats> {
+  const [inResp, outResp] = await Promise.all([
+    executeSqlViaApi(
+      `SELECT count(distinct hn) as total FROM referin WHERE refer_date = current_date`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT count(distinct hn) as total FROM referout WHERE refer_date = current_date`,
+      config,
+    ),
+  ]);
+  const referIn = parseQueryResponse(inResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const referOut = parseQueryResponse(outResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  return { referIn, referOut };
+}
+
+// ---------------------------------------------------------------------------
+// Revenue stats for today (total, self-pay, receivable)
+// ---------------------------------------------------------------------------
+
+export interface RevenueStats {
+  totalAmount: number;
+  selfPayAmount: number;
+  receivableAmount: number;
+}
+
+export async function getRevenueStats(
+  config: ConnectionConfig,
+): Promise<RevenueStats> {
+  const [totalResp, selfPayResp, receivableResp] = await Promise.all([
+    executeSqlViaApi(
+      `SELECT sum(coalesce(sum_price,0)) as total FROM opitemrece WHERE vstdate = current_date AND vn <> ''`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT sum(coalesce(sum_price,0)) as total FROM opitemrece WHERE vstdate = current_date AND vn <> '' AND paidst IN('01','03')`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT sum(coalesce(sum_price,0)) as total FROM opitemrece WHERE vstdate = current_date AND vn <> '' AND paidst NOT IN('01','03')`,
+      config,
+    ),
+  ]);
+  const totalAmount = parseQueryResponse(totalResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const selfPayAmount = parseQueryResponse(selfPayResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const receivableAmount = parseQueryResponse(receivableResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  return { totalAmount, selfPayAmount, receivableAmount };
+}
+
+// ---------------------------------------------------------------------------
+// Bed availability stats (today)
+// ---------------------------------------------------------------------------
+
+export interface BedStats {
+  totalBeds: number;
+  occupiedBeds: number;
+  availableBeds: number;
+  systemBeds: number;
+}
+
+export async function getBedStats(config: ConnectionConfig): Promise<BedStats> {
+  const [totalResp, occupiedResp, systemBedsResp] = await Promise.all([
+    executeSqlViaApi(
+      `SELECT sum(coalesce(bedcount,0)) as total FROM ward WHERE ward_active='Y'`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT count(distinct i.an) as total ` +
+      `FROM ipt i, ward w ` +
+      `WHERE i.ward = w.ward ` +
+      `AND i.confirm_discharge = 'N' ` +
+      `AND w.ward_active = 'Y' ` +
+      `AND lower(w.name) NOT LIKE '%home%ward%'`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT count(distinct b.bedno) as total ` +
+      `FROM roomno r, bedno b, bed_status_type bt, ward w ` +
+      `WHERE r.roomno = b.roomno and r.ward = w.ward  ` +
+      `AND b.bed_status_type_id = bt.bed_status_type_id ` +
+      `AND bt.is_available = 'Y' ` +
+      `AND w.ward_active = 'Y' ` +
+      `AND r.name NOT LIKE '%เสริม%' ` +
+      `AND r.name NOT LIKE '%แทรก%' ` +
+      `AND r.name NOT LIKE '%ยกเลิก%' ` +
+      `AND r.name NOT LIKE '%รอรับ%' ` +
+      `AND b.bed_status_type_id = 1 ` +
+      `AND lower(w.name) NOT LIKE '%home%ward%'`,
+      config,
+    ),
+  ]);
+  const totalBeds = parseQueryResponse(totalResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const occupiedBeds = parseQueryResponse(occupiedResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const systemBeds = parseQueryResponse(systemBedsResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  return { totalBeds, occupiedBeds, availableBeds: Math.max(0, systemBeds - occupiedBeds), systemBeds };
+}
+
+// ---------------------------------------------------------------------------
+// Bed occupancy rate for current month
+// ---------------------------------------------------------------------------
+
+export interface BedOccupancyStats {
+  occupancyRate: number;
+  admitDays: number;
+  totalBeds: number;
+  daysInPeriod: number;
+}
+
+export async function getBedOccupancyStats(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+): Promise<BedOccupancyStats> {
+  const firstDay = queryBuilder.firstDayOfMonth(dbType);
+  const today = queryBuilder.currentDate(dbType);
+
+  const [admitDaysResp, totalBedsResp] = await Promise.all([
+    executeSqlViaApi(
+      `SELECT count(*) as total FROM ward_admit_snapshot WHERE snap_date >= ${firstDay} AND snap_date <= ${today}`,
+      config,
+    ),
+    executeSqlViaApi(
+      `SELECT sum(coalesce(bedcount,0)) as total FROM ward WHERE ward_active='Y'`,
+      config,
+    ),
+  ]);
+
+  const admitDays = parseQueryResponse(admitDaysResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  const totalBeds = parseQueryResponse(totalBedsResp, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+
+  const now = new Date();
+  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const daysInPeriod = Math.floor((now.getTime() - firstOfMonth.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+  const denominator = daysInPeriod * totalBeds;
+  const occupancyRate = denominator > 0
+    ? Math.round((admitDays * 1000) / denominator) / 10
+    : 0;
+
+  return { occupancyRate, admitDays, totalBeds, daysInPeriod };
+}
+
+// ---------------------------------------------------------------------------
+// AdjRW sum for current month
+// ---------------------------------------------------------------------------
+
+export interface AdjRwStats {
+  adjRwTotal: number;
+}
+
+export async function getAdjRwThisMonth(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+): Promise<AdjRwStats> {
+  const firstDay = queryBuilder.firstDayOfMonth(dbType);
+  const today = queryBuilder.currentDate(dbType);
+
+  const response = await executeSqlViaApi(
+    `SELECT sum(coalesce(adjrw,0)) as total FROM ipt WHERE dchdate >= ${firstDay} AND dchdate <= ${today}`,
+    config,
+  );
+  const adjRwTotal = parseQueryResponse(response, (row) => Number(row['total'] ?? 0))[0] ?? 0;
+  return { adjRwTotal };
+}
+
+// ---------------------------------------------------------------------------
+// Pttype price group distribution for today
+// ---------------------------------------------------------------------------
+
+export interface PttypeGroupItem {
+  groupName: string;
+  visitCount: number;
+  percent: number;
+}
+
+export async function getPttypeDistribution(
+  config: ConnectionConfig,
+): Promise<PttypeGroupItem[]> {
+  const sql =
+    `SELECT pttype_price_group_name, count(distinct vn) as visit_count ` +
+    `FROM pttype_price_group p1, pttype p2, ovst ` +
+    `WHERE p1.pttype_price_group_id = p2.pttype_price_group_id ` +
+    `AND p2.pttype = ovst.pttype ` +
+    `AND vstdate = current_date ` +
+    `GROUP BY pttype_price_group_name ` +
+    `ORDER BY visit_count DESC`;
+
+  const response = await executeSqlViaApi(sql, config);
+  const rows = parseQueryResponse(response, (row) => ({
+    groupName: String(row['pttype_price_group_name'] ?? ''),
+    visitCount: Number(row['visit_count'] ?? 0),
+  }));
+
+  const total = rows.reduce((sum, r) => sum + r.visitCount, 0);
+  return rows.map((r) => ({
+    ...r,
+    percent: total > 0 ? Math.round((r.visitCount / total) * 100) : 0,
+  }));
+}
+
+/**
+ * IPD discharges this month broken down by pttype price group.
+ */
+export async function getThisMonthIPDDischarges(
+  config: ConnectionConfig,
+  dbType: DatabaseType,
+): Promise<PttypeGroupItem[]> {
+  const firstDay = queryBuilder.firstDayOfMonth(dbType);
+  const today = queryBuilder.currentDate(dbType);
+
+  const sql =
+    `SELECT pttype_price_group_name, count(distinct an) as visit_count ` +
+    `FROM pttype_price_group p1, pttype p2, ipt ` +
+    `WHERE p1.pttype_price_group_id = p2.pttype_price_group_id ` +
+    `AND p2.pttype = ipt.pttype ` +
+    `AND dchdate >= ${firstDay} AND dchdate <= ${today} ` +
+    `GROUP BY pttype_price_group_name ` +
+    `ORDER BY visit_count DESC`;
+
+  const response = await executeSqlViaApi(sql, config);
+  const rows = parseQueryResponse(response, (row) => ({
+    groupName: String(row['pttype_price_group_name'] ?? ''),
+    visitCount: Number(row['visit_count'] ?? 0),
+  }));
+
+  const total = rows.reduce((sum, r) => sum + r.visitCount, 0);
+  return rows.map((r) => ({
+    ...r,
+    percent: total > 0 ? Math.round((r.visitCount / total) * 100) : 0,
+  }));
+}
+
+/**
+ * OPD visits per day broken down by pttype price group (for stacked bar chart).
+ */
+export async function getPttypeByDay(
+  config: ConnectionConfig,
+  startDate: string,
+  endDate: string,
+): Promise<{ date: string; groupName: string; visitCount: number }[]> {
+  const sql =
+    `SELECT DATE(vstdate) as visit_date, p1.pttype_price_group_name, COUNT(DISTINCT ovst.vn) as visit_count ` +
+    `FROM pttype_price_group p1, pttype p2, ovst ` +
+    `WHERE p1.pttype_price_group_id = p2.pttype_price_group_id ` +
+    `AND p2.pttype = ovst.pttype ` +
+    `AND vstdate >= '${startDate}' AND vstdate <= '${endDate}' ` +
+    `GROUP BY DATE(vstdate), p1.pttype_price_group_name ` +
+    `ORDER BY visit_date, visit_count DESC`;
+  const response = await executeSqlViaApi(sql, config);
+  return parseQueryResponse(response, (row) => ({
+    date: String(row['visit_date'] ?? '').slice(0, 10),
+    groupName: String(row['pttype_price_group_name'] ?? ''),
+    visitCount: Number(row['visit_count'] ?? 0),
+  }));
+}
+
+/**
+ * OPD visits per day broken down by specialty/department (for stacked bar chart).
+ */
+export async function getDeptByDay(
+  config: ConnectionConfig,
+  _dbType: DatabaseType,
+  startDate: string,
+  endDate: string,
+): Promise<{ date: string; departmentName: string; visitCount: number }[]> {
+  const sql =
+    `SELECT DATE(ovst.vstdate) as visit_date, s.name as dept_name, COUNT(DISTINCT ovst.vn) as visit_count ` +
+    `FROM ovst INNER JOIN spclty s ON s.spclty = ovst.spclty ` +
+    `WHERE ovst.vstdate >= '${startDate}' AND ovst.vstdate <= '${endDate}' ` +
+    `GROUP BY DATE(ovst.vstdate), s.name ` +
+    `ORDER BY visit_date, visit_count DESC`;
+  const response = await executeSqlViaApi(sql, config);
+  return parseQueryResponse(response, (row) => ({
+    date: String(row['visit_date'] ?? '').slice(0, 10),
+    departmentName: String(row['dept_name'] ?? ''),
+    visitCount: Number(row['visit_count'] ?? 0),
+  }));
+}
+
+/**
+ * OPD visit count grouped by pttype price group for a date range.
+ */
+export async function getPttypeDistributionForRange(
+  config: ConnectionConfig,
+  startDate: string,
+  endDate: string,
+): Promise<PttypeGroupItem[]> {
+  const sql =
+    `SELECT pttype_price_group_name, count(distinct vn) as visit_count ` +
+    `FROM pttype_price_group p1, pttype p2, ovst ` +
+    `WHERE p1.pttype_price_group_id = p2.pttype_price_group_id ` +
+    `AND p2.pttype = ovst.pttype ` +
+    `AND vstdate >= '${startDate}' AND vstdate <= '${endDate}' ` +
+    `GROUP BY pttype_price_group_name ` +
+    `ORDER BY visit_count DESC`;
+  const response = await executeSqlViaApi(sql, config);
+  const rows = parseQueryResponse(response, (row) => ({
+    groupName: String(row['pttype_price_group_name'] ?? ''),
+    visitCount: Number(row['visit_count'] ?? 0),
+  }));
+  const total = rows.reduce((sum, r) => sum + r.visitCount, 0);
+  return rows.map((r) => ({
+    ...r,
+    percent: total > 0 ? Math.round((r.visitCount / total) * 100) : 0,
+  }));
 }

@@ -12,6 +12,7 @@ import { LogOut, Moon, Sun } from 'lucide-react';
 const PAGE_TITLES: Record<string, string> = {
   '/': 'ภาพรวม',
   '/trends': 'แนวโน้ม',
+  '/appointments': 'ระบบนัดหมาย',
   '/departments': 'แผนก',
   '/demographics': 'ข้อมูลประชากร',
 };
@@ -38,11 +39,58 @@ export function AppHeader() {
       {/* Left: Hospital logo + title + current page                        */}
       {/* ----------------------------------------------------------------- */}
       <div className="flex items-center gap-3">
-        <img
-          src="/dashboard-logo.png"
-          alt="Hospital Logo"
-          className="h-9 w-9 rounded-lg object-contain"
-        />
+        {/* HOSxP Easy Dashboard icon — teal gradient + cross + chart */}
+        <svg
+          width="36"
+          height="36"
+          viewBox="0 0 512 512"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          className="shrink-0 rounded-xl shadow-sm"
+          aria-label="HOSxP Easy Dashboard Logo"
+        >
+          <defs>
+            <radialGradient id="bmsLogoGrad" cx="45%" cy="40%" r="70%" fx="30%" fy="25%">
+              <stop offset="0%" stopColor="#2FD0DF" />
+              <stop offset="60%" stopColor="#1AA8BA" />
+              <stop offset="100%" stopColor="#0B718A" />
+            </radialGradient>
+          </defs>
+
+          {/* Rounded square background */}
+          <rect width="512" height="512" rx="108" ry="108" fill="url(#bmsLogoGrad)" />
+
+          {/* Subtle highlight */}
+          <ellipse cx="180" cy="150" rx="200" ry="130" fill="white" fillOpacity="0.06" />
+
+          {/* Medical cross — horizontal bar */}
+          <rect x="88" y="188" width="336" height="136" rx="28" ry="28" fill="white" fillOpacity="0.92" />
+          {/* Medical cross — vertical bar */}
+          <rect x="188" y="88" width="136" height="336" rx="28" ry="28" fill="white" fillOpacity="0.92" />
+          {/* Center fill */}
+          <rect x="188" y="188" width="136" height="136" fill="white" fillOpacity="0.92" />
+
+          {/* Bar chart bars (teal on white cross) */}
+          <rect x="218" y="262" width="26" height="52" rx="5" fill="#1AA8BA" fillOpacity="0.85" />
+          <rect x="252" y="240" width="26" height="74" rx="5" fill="#1AA8BA" fillOpacity="0.85" />
+          <rect x="286" y="222" width="26" height="92" rx="5" fill="#0F8A9A" fillOpacity="0.85" />
+
+          {/* Upward trend arrow */}
+          <polyline
+            points="210,305 245,272 278,252 315,228"
+            stroke="#0D7A8A"
+            strokeWidth="10"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <polygon points="315,228 295,230 308,247" fill="#0D7A8A" />
+
+          {/* Sparkle accent */}
+          <circle cx="400" cy="95" r="5" fill="white" fillOpacity="0.6" />
+          <circle cx="418" cy="112" r="3" fill="white" fillOpacity="0.4" />
+          <circle cx="386" cy="110" r="3" fill="white" fillOpacity="0.4" />
+        </svg>
         <div className="flex flex-col">
           <h1 className="text-base font-extrabold leading-tight tracking-tight text-white">
             {session?.userInfo.location || 'โรงพยาบาล'}

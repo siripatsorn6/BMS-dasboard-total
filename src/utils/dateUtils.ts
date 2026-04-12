@@ -24,27 +24,31 @@ function toDate(date: Date | string): Date {
 // ---------------------------------------------------------------------------
 
 /**
- * Formats a date as a human-readable string.
+ * Formats a date as a human-readable string with Buddhist Era year (พ.ศ.).
  *
- * @example formatDate(new Date(2026, 2, 17)) // "Mar 17, 2026"
+ * @example formatDate(new Date(2026, 2, 17)) // "17 มี.ค. 2569"
  *
  * @param date - A `Date` object or ISO-8601 string.
- * @returns The formatted date string in `'MMM dd, yyyy'` format.
+ * @returns The formatted date string with Buddhist Era year.
  */
 export function formatDate(date: Date | string): string {
-  return format(toDate(date), 'd MMM yyyy', { locale: th });
+  const d = toDate(date);
+  const beYear = d.getFullYear() + 543;
+  return format(d, 'd MMM', { locale: th }) + ' ' + beYear;
 }
 
 /**
- * Formats a date with time as a human-readable string.
+ * Formats a date with time as a human-readable string with Buddhist Era year (พ.ศ.).
  *
- * @example formatDateTime(new Date(2026, 2, 17, 14, 30)) // "Mar 17, 2026 14:30"
+ * @example formatDateTime(new Date(2026, 2, 17, 14, 30)) // "17 มี.ค. 2569 14:30"
  *
  * @param date - A `Date` object or ISO-8601 string.
- * @returns The formatted date-time string in `'MMM dd, yyyy HH:mm'` format.
+ * @returns The formatted date-time string with Buddhist Era year.
  */
 export function formatDateTime(date: Date | string): string {
-  return format(toDate(date), 'd MMM yyyy HH:mm', { locale: th });
+  const d = toDate(date);
+  const beYear = d.getFullYear() + 543;
+  return format(d, 'd MMM', { locale: th }) + ' ' + beYear + format(d, ' HH:mm');
 }
 
 /**
@@ -60,16 +64,22 @@ export function formatDateISO(date: Date | string): string {
 }
 
 /**
- * Returns the ISO date strings for a range spanning the last N days up to today.
+ * Returns the ISO date strings for an inclusive date range of exactly N days ending today.
  *
- * @example getDateRange(7) // { startDate: "2026-03-10", endDate: "2026-03-17" }
+ * Both start and end dates are counted, so the range always spans exactly `days` days.
  *
- * @param days - Number of days to look back from today.
+ * @example getDateRange(7)  // today=2026-03-17 → { startDate: "2026-03-11", endDate: "2026-03-17" } (7 days)
+ * @example getDateRange(30) // today=2026-03-17 → { startDate: "2026-02-16", endDate: "2026-03-17" } (30 days)
+ * @example getDateRange(0)  // { startDate: today, endDate: today } (today only)
+ *
+ * @param days - Total number of days in the range (inclusive of both endpoints).
  * @returns An object with `startDate` and `endDate` in `'yyyy-MM-dd'` format.
  */
 export function getDateRange(days: number): { startDate: string; endDate: string } {
   const today = new Date();
-  const start = subDays(today, days);
+  // Subtract (days - 1) so both start and end are counted: a range of N days
+  // has N-1 gaps between them. Special-case days=0 → today only (same as days=1).
+  const start = subDays(today, Math.max(0, days - 1));
 
   return {
     startDate: formatDateISO(start),

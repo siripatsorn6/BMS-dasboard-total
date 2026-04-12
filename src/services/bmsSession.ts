@@ -106,11 +106,16 @@ export function extractConnectionConfig(response: BmsSessionResponse): Connectio
     );
   }
 
+  // Use database type from session response when available; fall back to
+  // 'mysql' so that detectDatabaseType() can confirm via VERSION() query.
+  const rawDbType = userInfo?.bms_database_type?.toLowerCase() ?? '';
+  const databaseType: DatabaseType = rawDbType.includes('postgres') ? 'postgresql' : 'mysql';
+
   return {
     apiUrl,
     bearerToken,
     appIdentifier: APP_IDENTIFIER,
-    databaseType: 'mysql', // default; updated after VERSION query
+    databaseType,
   };
 }
 
@@ -147,6 +152,35 @@ export function extractSystemInfo(response: BmsSessionResponse): SystemInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Concurrency limiter — prevents 429 Too Many Requests from the BMS API
+// ---------------------------------------------------------------------------
+
+/** Maximum number of SQL requests that may be in-flight at the same time. */
+const MAX_CONCURRENT_REQUESTS = 3;
+
+let _activeRequests = 0;
+const _waitQueue: Array<() => void> = [];
+
+function _acquireSlot(): Promise<void> {
+  if (_activeRequests < MAX_CONCURRENT_REQUESTS) {
+    _activeRequests++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    _waitQueue.push(() => {
+      _activeRequests++;
+      resolve();
+    });
+  });
+}
+
+function _releaseSlot(): void {
+  _activeRequests--;
+  const next = _waitQueue.shift();
+  if (next) next();
+}
+
+// ---------------------------------------------------------------------------
 // SQL execution
 // ---------------------------------------------------------------------------
 
@@ -154,21 +188,34 @@ export function extractSystemInfo(response: BmsSessionResponse): SystemInfo {
  * Execute an arbitrary SQL statement against the BMS API and return the raw
  * response.
  *
+ * Requests are queued so that at most {@link MAX_CONCURRENT_REQUESTS} are
+ * in-flight at any time, preventing HTTP 429 rate-limit errors.
+ *
  * @throws {Error} On network failure, HTTP errors, or timeout.
  */
 export async function executeSqlViaApi(
   sql: string,
   config: ConnectionConfig,
 ): Promise<SqlApiResponse> {
+  await _acquireSlot();
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${config.apiUrl}/api/sql`, {
+    // Route all requests through the /bms-proxy endpoint.
+    // In dev: handled by the Vite middleware (vite.config.ts).
+    // In production: handled by the nginx proxy_pass block (nginx.conf).
+    // Both forward to {bms_url}/api/sql using the x-target-url header.
+    const fetchUrl = '/bms-proxy';
+    const extraHeaders: Record<string, string> = { 'x-target-url': config.apiUrl };
+
+    const response = await fetch(fetchUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.bearerToken}`,
         'Content-Type': 'application/json',
+        ...extraHeaders,
       },
       body: JSON.stringify({ sql, app: config.appIdentifier }),
       signal: controller.signal,
@@ -206,6 +253,7 @@ export async function executeSqlViaApi(
     );
   } finally {
     clearTimeout(timeoutId);
+    _releaseSlot();
   }
 }
 

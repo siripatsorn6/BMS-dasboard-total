@@ -1,16 +1,16 @@
 // =============================================================================
-// Department: ทันตกรรม (Dentistry)
+// IPD: ห้องคลอด
 // =============================================================================
 
-import { Smile } from 'lucide-react'
+import { Baby } from 'lucide-react'
 import { DepartmentPageTemplate } from '@/components/dashboard/DepartmentPageTemplate'
 
-export default function Dentistry() {
+export default function IpdDelivery() {
   return (
     <DepartmentPageTemplate
-      title="ทันตกรรม"
-      subtitle="Dentistry"
-      icon={Smile}
+      title="ห้องคลอด"
+      subtitle="Labour & Delivery Room"
+      icon={Baby}
     />
   )
 }

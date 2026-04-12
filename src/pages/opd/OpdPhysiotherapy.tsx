@@ -1,16 +1,16 @@
 // =============================================================================
-// Department: สูติกรรม (Obstetrics)
+// OPD: งานกายภาพบำบัด
 // =============================================================================
 
-import { Baby } from 'lucide-react'
+import { Activity } from 'lucide-react'
 import { DepartmentPageTemplate } from '@/components/dashboard/DepartmentPageTemplate'
 
-export default function Obstetrics() {
+export default function OpdPhysiotherapy() {
   return (
     <DepartmentPageTemplate
-      title="สูติกรรม"
-      subtitle="Obstetrics"
-      icon={Baby}
+      title="งานกายภาพบำบัด"
+      subtitle="Physical Therapy"
+      icon={Activity}
     />
   )
 }
